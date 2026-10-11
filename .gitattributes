@@ -1,0 +1,14 @@
+# 统一换行符,避免 Windows/Linux 来回 checkout 时 diff 满天飞
+* text=auto eol=lf
+
+# 二进制文件不要被当成文本处理
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.woff2 binary
+
+# Windows 批处理必须是 CRLF,否则旧解析器会出错
+*.bat text eol=crlf
+*.cmd text eol=crlf

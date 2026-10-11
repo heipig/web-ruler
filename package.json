@@ -1,0 +1,26 @@
+{
+  "name": "web-ruler",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "网页版测距仪:摄像头 / 照片 + 参照物标定的长度测量工具",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/heipig/web-ruler.git"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4173",
+    "local": "vite --host",
+    "test": "node --test \"test/*.test.js\"",
+    "smoke": "node tools/smoke.mjs"
+  },
+  "devDependencies": {
+    "vite": "^5.4.11"
+  },
+  "dependencies": {
+    "three": "^0.186.1"
+  }
+}

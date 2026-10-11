@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="description" content="网页版测距仪:用参照物标定,在照片或实时相机画面上测量真实长度。纯前端,不上传任何数据。" />
+  <title>网页测距仪 · Web Ruler</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📏</text></svg>" />
+</head>
+<body>
+  <div id="app">
+    <!-- 顶部工具栏 -->
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-icon" aria-hidden="true">📏</span>
+        <h1>网页测距仪</h1>
+      </div>
+
+      <nav class="modes" role="tablist" aria-label="测量模式">
+        <button class="mode-btn" role="tab" data-mode="photo" aria-selected="true">
+          <span aria-hidden="true">🖼</span> 照片
+        </button>
+        <button class="mode-btn" role="tab" data-mode="camera" aria-selected="false">
+          <span aria-hidden="true">📷</span> 相机
+        </button>
+        <button class="mode-btn" role="tab" data-mode="ar" aria-selected="false" id="ar-tab" hidden>
+          <span aria-hidden="true">✨</span> AR
+        </button>
+      </nav>
+
+      <button class="icon-btn" id="btn-help" title="使用说明" aria-label="使用说明">?</button>
+    </header>
+
+    <main class="workspace">
+      <!-- 画布区 -->
+      <section class="stage-wrap">
+        <div class="stage" id="stage">
+          <canvas id="stage-canvas"></canvas>
+
+          <!-- 摄像头预览(相机/AR 模式下显示) -->
+          <video id="cam-video" playsinline muted hidden></video>
+
+          <!-- 空状态:还没载入图片/相机 -->
+          <div class="empty-state" id="empty-state">
+            <div class="empty-inner">
+              <div class="empty-icon" aria-hidden="true">📐</div>
+              <h2>开始测量</h2>
+              <p id="empty-hint">上传一张照片,或打开摄像头。</p>
+              <div class="empty-actions">
+                <button class="btn primary" id="btn-pick-photo">选择照片</button>
+                <button class="btn" id="btn-start-camera">打开摄像头</button>
+              </div>
+              <p class="empty-note">
+                所有计算都在你的设备上完成,照片不会上传到任何服务器。
+              </p>
+            </div>
+          </div>
+
+          <!-- 摄像头不可用时的提示 -->
+          <div class="empty-state" id="camera-error" hidden>
+            <div class="empty-inner">
+              <div class="empty-icon" aria-hidden="true">🚫</div>
+              <h2 id="camera-error-title">摄像头不可用</h2>
+              <p id="camera-error-msg"></p>
+              <div class="empty-actions">
+                <button class="btn primary" id="btn-fallback-photo">改用上传照片</button>
+                <button class="btn" id="btn-retry-camera">重试</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 缩放控件 -->
+          <div class="zoom-controls" id="zoom-controls" hidden>
+            <button class="zoom-btn" id="btn-zoom-out" aria-label="缩小">−</button>
+            <span class="zoom-level" id="zoom-level">100%</span>
+            <button class="zoom-btn" id="btn-zoom-in" aria-label="放大">+</button>
+            <button class="zoom-btn reset" id="btn-zoom-reset" aria-label="适应屏幕">⤢</button>
+          </div>
+
+          <!-- 待配对提示 -->
+          <div class="hint-pill" id="hint-pill" hidden></div>
+        </div>
+      </section>
+
+      <!-- 侧边面板 -->
+      <aside class="panel" id="panel">
+        <div class="panel-scroll">
+          <!-- 步骤指示 -->
+          <div class="steps" id="steps">
+            <div class="step" data-step="1">
+              <span class="step-num">1</span>
+              <span class="step-text">选参照物</span>
+            </div>
+            <div class="step" data-step="2">
+              <span class="step-num">2</span>
+              <span class="step-text">点参照物</span>
+            </div>
+            <div class="step" data-step="3">
+              <span class="step-num">3</span>
+              <span class="step-text">量长度</span>
+            </div>
+          </div>
+
+          <!-- 1. 参照物选择 -->
+          <section class="block">
+            <h3 class="block-title">参照物</h3>
+            <div class="ref-list" id="ref-list"></div>
+
+            <div class="custom-ref" id="custom-ref" hidden>
+              <label class="field">
+                <span class="field-label">真实长度</span>
+                <span class="field-row">
+                  <input type="number" id="custom-value" min="0.1" step="0.1" value="200" inputmode="decimal" />
+                  <select id="custom-unit">
+                    <option value="mm">毫米</option>
+                    <option value="cm" selected>厘米</option>
+                    <option value="m">米</option>
+                    <option value="in">英寸</option>
+                  </select>
+                </span>
+              </label>
+              <p class="field-note">
+                用尺子量一次你手边的东西(比如「一拃」),填在这里,以后可以直接复用。
+              </p>
+            </div>
+
+            <p class="ref-hint" id="ref-hint"></p>
+          </section>
+
+          <!-- 2. 测量结果 -->
+          <section class="block">
+            <h3 class="block-title">
+              测量结果
+              <button class="text-btn" id="btn-clear-measure" hidden>清空</button>
+            </h3>
+            <div class="results" id="results">
+              <p class="muted">还没有测量结果。</p>
+            </div>
+          </section>
+
+          <!-- 精度说明 -->
+          <section class="block" id="confidence-block" hidden>
+            <h3 class="block-title">这次测得准吗</h3>
+            <div class="confidence-card" id="confidence-card"></div>
+          </section>
+
+          <!-- 操作 -->
+          <section class="block">
+            <h3 class="block-title">操作</h3>
+            <div class="actions">
+              <button class="btn" id="btn-undo">撤销上一步</button>
+              <button class="btn" id="btn-reset">重新开始</button>
+              <button class="btn" id="btn-copy">复制结果</button>
+              <button class="btn" id="btn-export">导出标注图</button>
+              <button class="btn" id="btn-diagnostics">环境自检</button>
+            </div>
+          </section>
+
+          <!-- 已知限制 -->
+          <section class="block">
+            <h3 class="block-title">准不准?先看这几条</h3>
+            <ul class="limits">
+              <li><b>参照物越大越准。</b>让参照物在画面里尽量占满,误差能到 1%~2%。</li>
+              <li><b>参照物要跟被测物在同一个平面。</b>否则焦距差异会带来系统偏差。</li>
+              <li><b>斜着拍,请用「矩形透视校正」。</b>点四个角的模式会自动还原透视,比两点标定准得多。</li>
+              <li><b>量立体的高度不准。</b>这是所有单张照片测量的通病(手机自带的测距仪也一样)。</li>
+              <li><b>「烟盒」「一拃」这类尺寸因人而异</b>,请先用尺子核对自己的实际尺寸。</li>
+            </ul>
+          </section>
+        </div>
+      </aside>
+    </main>
+
+    <!-- 帮助弹层 -->
+    <div class="modal" id="help-modal" hidden>
+      <div class="modal-card">
+        <button class="modal-close" id="btn-help-close" aria-label="关闭">×</button>
+        <h2>怎么用</h2>
+
+        <h3>一句话原理</h3>
+        <p>
+          先告诉程序「画面里这个东西有多长」,它就能推算出画面里其他东西有多长。
+          这个东西叫<b>参照物</b>。参照物越标准、在画面里越大,结果越准。
+        </p>
+
+        <h3>三步</h3>
+        <ol>
+          <li><b>选参照物</b> —— 银行卡、A4 纸是标准尺寸,最准。</li>
+          <li><b>点参照物</b> —— 矩形参照物点四个角(左上→右上→右下→左下),线性参照物点两端。</li>
+          <li><b>量长度</b> —— 在被测物上点两个点,长度立刻显示出来。</li>
+        </ol>
+
+        <h3>让结果更准的三个习惯</h3>
+        <ol>
+          <li>让参照物和被测物<b>离相机差不多远</b>,最好放在同一张桌面上。</li>
+          <li>能斜着拍、又能看到参照物四个角时,用矩形模式,精度提升最明显。</li>
+          <li>点完点可以<b>拖动微调</b>,数字会实时更新。放大后再点更准。</li>
+        </ol>
+
+        <h3>关于「AR」模式</h3>
+        <p>
+          AR 模式需要浏览器支持 WebXR。<b>iPhone 的 Safari 至今不支持</b>
+          (Apple 尚未实现该功能),所以 iPhone 上不会出现这个标签页 —— 这不是 bug。
+          安卓手机上还需要装有 Google Play 服务(ARCore),国产机型通常没有。
+          没有 AR 不影响使用:相机 + 参照物标定是全平台都能用的主力方案。
+        </p>
+
+        <h3>隐私</h3>
+        <p>
+          本页面纯前端运行,<b>不联网、不上传任何照片</b>。所有计算都在你的设备上完成。
+          你甚至可以把这个页面存到本地、断网使用。
+        </p>
+      </div>
+    </div>
+
+    <!-- 自检弹层 -->
+    <div class="modal" id="diag-modal" hidden>
+      <div class="modal-card">
+        <button class="modal-close" id="btn-diag-close" aria-label="关闭">×</button>
+        <h2>环境自检</h2>
+        <p class="muted">出问题时,把这些信息截图发出来通常就够了。</p>
+        <div id="diag-content"></div>
+      </div>
+    </div>
+
+    <!-- 隐藏的文件选择器 -->
+    <input type="file" id="file-input" accept="image/*" hidden />
+
+    <!-- 轻提示 -->
+    <div class="toast" id="toast" hidden></div>
+  </div>
+
+  <script type="module" src="/src/app.js"></script>
+</body>
+</html>

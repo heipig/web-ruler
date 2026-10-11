@@ -1,0 +1,64 @@
+name: Deploy to GitHub Pages
+
+# 推送到 main 就自动构建并发布。
+# 为什么用 Actions 而不是「部署分支」:构建产物 (dist/) 不该进仓库,
+# 那样会让仓库臃肿且历史难读。Actions 每次在云端重新构建,干净。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # 允许在 Actions 页面手动触发
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同时只跑一个部署;新的推送取消排队中的旧任务,但不动正在进行的部署
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 单元测试
+        run: npm test
+
+      - name: 构建
+        run: npm run build
+
+      # 断言产物齐全 —— 宁可构建失败,也不要发布一个「看起来能跑」的坏包
+      - name: 校验构建产物
+        run: |
+          set -e
+          test -f dist/index.html || { echo "缺少 index.html"; exit 1; }
+          ls dist/assets/*.js >/dev/null || { echo "缺少 JS 产物"; exit 1; }
+          ls dist/assets/*.css >/dev/null || { echo "缺少 CSS 产物"; exit 1; }
+          echo "产物文件数: $(find dist -type f | wc -l)"
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
