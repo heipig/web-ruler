@@ -14,29 +14,26 @@
 
 const url = process.argv[2] || 'http://localhost:4173/';
 
-// 找一个可用的浏览器
-const CANDIDATES = [
-  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-  process.env.LOCALAPPDATA + '\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-];
-
 const fs = await import('node:fs');
 const os = await import('node:os');
 const path = await import('node:path');
 const { spawn } = await import('node:child_process');
 const http = await import('node:http');
+const { requireBrowser } = await import('./find-browser.mjs');
 
-const browserPath = CANDIDATES.find((p) => p && fs.existsSync(p));
-if (!browserPath) {
-  console.error('找不到 Chrome 或 Edge,跳过冒烟测试');
-  process.exit(2);
-}
-
+const browserPath = requireBrowser();
 const port = 9333;
 const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'webruler-smoke-'));
+
+/**
+ * 容器/CI 环境下的额外启动参数。
+ * 不加这些,headless Chrome 在 GitHub Actions 的 ubuntu runner 上
+ * 经常直接起不来(沙箱权限、/dev/shm 太小导致的崩溃)。
+ * 只用于测试用的临时浏览器实例,不影响用户。
+ */
+const CI_FLAGS = process.platform === 'linux'
+  ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-setuid-sandbox']
+  : [];
 
 const child = spawn(browserPath, [
   `--remote-debugging-port=${port}`,
@@ -46,6 +43,7 @@ const child = spawn(browserPath, [
   '--no-default-browser-check',
   '--disable-gpu',
   '--window-size=1200,900',
+  ...CI_FLAGS,
   'about:blank',
 ], { stdio: 'ignore', detached: false });
 

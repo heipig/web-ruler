@@ -60,14 +60,24 @@ jobs:
           set -e
           npx vite preview --port 4173 --strictPort &
           PREVIEW_PID=$!
-          # 等服务器起来
+
+          # 等服务器起来。显式判断是否真的起来了 —— 否则连不上时
+          # 测试会给出「页面加载失败」这种误导性的错误,浪费时间排查。
+          READY=0
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:4173/ > /dev/null; then break; fi
+            if curl -sf http://localhost:4173/ > /dev/null; then READY=1; break; fi
             sleep 1
           done
+          if [ "$READY" != "1" ]; then
+            echo "预览服务器 30 秒内没有就绪"
+            kill $PREVIEW_PID 2>/dev/null || true
+            exit 1
+          fi
+
           node tools/smoke.mjs http://localhost:4173/
           node tools/smoke-camera.mjs http://localhost:4173/
-          kill $PREVIEW_PID
+
+          kill $PREVIEW_PID 2>/dev/null || true
 
       - uses: actions/configure-pages@v5
 

@@ -15,28 +15,25 @@
 
 const url = process.argv[2] || 'http://localhost:4173/';
 
-const CANDIDATES = [
-  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-  process.env.LOCALAPPDATA + '\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-];
-
 const fs = await import('node:fs');
 const os = await import('node:os');
 const path = await import('node:path');
 const { spawn } = await import('node:child_process');
 const http = await import('node:http');
+const { requireBrowser } = await import('./find-browser.mjs');
 
-const browserPath = CANDIDATES.find((p) => p && fs.existsSync(p));
-if (!browserPath) {
-  console.error('找不到 Chrome 或 Edge,跳过摄像头测试');
-  process.exit(2);
-}
-
+const browserPath = requireBrowser();
 const port = 9334;
 const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'webruler-cam-'));
+
+/**
+ * 容器/CI 环境下的额外启动参数。
+ * headless Chrome 在 GitHub Actions 的 ubuntu runner 上不加这些经常起不来。
+ * 只用于测试用的临时浏览器实例。
+ */
+const CI_FLAGS = process.platform === 'linux'
+  ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-setuid-sandbox']
+  : [];
 
 const child = spawn(browserPath, [
   `--remote-debugging-port=${port}`,
@@ -46,6 +43,7 @@ const child = spawn(browserPath, [
   '--no-default-browser-check',
   '--disable-gpu',
   '--window-size=1200,900',
+  ...CI_FLAGS,
   // 关键:提供一路合成的摄像头视频流,并自动授权
   '--use-fake-device-for-media-stream',
   '--use-fake-ui-for-media-stream',
