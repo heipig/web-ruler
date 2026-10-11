@@ -123,10 +123,13 @@ GitHub Pages 自带 HTTPS,所以部署上去就能直接用摄像头。如果你
 ```bash
 npm install
 npm run dev            # 开发服务器(默认 http://localhost:5173)
-npm test               # 单元测试(几何、单位、状态机、视口)
+npm test               # 单元测试(107 项:几何、单位、状态机、视口、精度、AR 逻辑)
 npm run build          # 生产构建
 npm run preview        # 预览构建产物
-node tools/smoke.mjs http://localhost:4173/   # 真实浏览器冒烟测试
+
+# 浏览器端冒烟测试(会真的启动 Chrome/Edge 跑一遍)
+npm run smoke        -- http://localhost:4173/   # 照片模式
+npm run smoke:camera -- http://localhost:4173/   # 摄像头模式(用合成视频流,无需真摄像头)
 ```
 
 `npm run local` 可以用手机访问开发服务器(需要 HTTPS 才能测摄像头)。
@@ -138,10 +141,11 @@ node tools/smoke.mjs http://localhost:4173/   # 真实浏览器冒烟测试
 ## 技术要点
 
 - **纯前端**,无框架。Vite 构建,原生 ES 模块。
-- **几何核心**(`src/geometry.js`)是纯函数,无 DOM 依赖,有 34 项单元测试覆盖 —— 包括用已知投影矩阵反解验证透视校正的精度。
+- **几何核心**(`src/geometry.js`)是纯函数,无 DOM 依赖,有单元测试覆盖 —— 包括用已知投影矩阵反解验证透视校正的精度。
 - **测量点位一律存「原图像素坐标」**,屏幕坐标只是渲染时的临时投影。所以缩放、旋转屏幕、改窗口大小都不会让测量点错位。
 - **长度永远按需重算,不缓存。** 因为用户拖点后必须立刻更新,缓存会导致「线动了数字没动」。
-- 主包仅 **33 KB**(gzip 14 KB),AR 部分单独分包。
+- 主包仅 **35 KB**(gzip 14 KB),AR 部分单独分包(约 510 KB),只有支持的设备才下载。
+- **两条主路径都有自动化验证**:照片模式和摄像头模式各有一个真实浏览器冒烟测试,在 CI 里每次推送都会跑,并断言测量数值正确。
 
 ---
 
