@@ -27,6 +27,8 @@ WebRuler/
 │   └── styles.css          主样式
 ├── test/                   单元测试(node --test)
 └── tools/
+    ├── find-browser.mjs    跨平台查找 Chrome/Chromium/Edge
+    ├── smoke-hidden.mjs    隐藏元素与弹层开关测试
     ├── smoke.mjs           照片模式冒烟测试
     └── smoke-camera.mjs    摄像头模式冒烟测试(用假视频流)
 ```
@@ -97,8 +99,8 @@ rel = √( (σ_L / L_measure)²  +  (σ_L / L_reference)² )
 npm test
 ```
 
-覆盖 107 项:几何(含单应矩阵反解验证)、单位换算、参照物库、测量状态机、
-视口变换、精度模型、绘制层约定、AR 纯逻辑。
+覆盖 114 项:几何(含单应矩阵反解验证)、单位换算、参照物库、测量状态机、
+视口变换、精度模型、绘制层约定、AR 纯逻辑、样式不变量。
 
 关于几何测试的思路:**用已知的投影矩阵构造「拍到的照片」,再反解**,
 然后验证图像上任意两点映射回毫米平面的距离等于它们的真实距离。
@@ -112,15 +114,26 @@ drawScene 里有一次 clearRect,把调用方刚画好的照片擦掉了,
 
 ### 浏览器冒烟测试
 
-分两个,覆盖项目的两条核心路径(缺一条就有一半功能没被验证过):
+分三个,覆盖三条核心路径(缺一条就有一部分功能没被验证过):
 
 ```bash
 npm run build
 npm run preview                       # 另开一个终端
 
+npm run smoke:hidden -- http://localhost:4173/    # 隐藏元素 / 弹层开关
 npm run smoke        -- http://localhost:4173/    # 照片模式
 npm run smoke:camera -- http://localhost:4173/    # 摄像头模式
 ```
+
+**弹层/隐藏**(`tools/smoke-hidden.mjs`)—— 这个测的是曾经把用户彻底卡死的 bug:
+
+1. 所有标了 `hidden` 的元素,**用 `getComputedStyle` 断言真的不可见**
+2. 打开帮助弹层,用 `elementFromPoint` 确认**关闭按钮确实在最上层**(没被遮挡)
+3. 点关闭,断言弹层真的消失
+4. 断言底层按钮重新可以点到
+
+第 1 步的写法是关键:必须看**计算样式**,不能看 `el.hidden` 属性 ——
+属性是对的、CSS 却不理它,这种情况真实发生过(见下方「hidden 属性陷阱」)。
 
 **照片模式**(`tools/smoke.mjs`)用 DevTools Protocol 启动真实的 Edge/Chrome:
 
@@ -146,6 +159,53 @@ npm run smoke:camera -- http://localhost:4173/    # 摄像头模式
 
 测试通过 `window.__rulerAddPoint` / `window.__rulerDebug` 驱动流程(定义在 `app.js` 末尾)。
 这两个钩子是纯前端应用,不构成安全问题。
+
+### ⚠️ hidden 属性陷阱(曾导致用户完全无法使用)
+
+**现象**:打开页面就看到弹层盖着,点「关闭」毫无反应。多台手机都一样。
+
+**根因**:`hidden` 属性不是自我保证的,它依赖浏览器默认样式表里的
+`[hidden] { display: none }`。这条规则优先级是 `(0,1,0)`,而作者样式里
+
+```css
+.modal { display: grid; }
+.empty-state { display: grid; }
+.zoom-controls { display: flex; }
+```
+
+这些类选择器同样是 `(0,1,0)` 且声明更靠后,**把 `hidden` 盖掉了**。
+结果:JS 里 `el.hidden = true` 属性确实加上了(`el.hidden` 读出来也是 `true`),
+元素却照样显示。而自检弹层同样没藏住,它叠在帮助弹层之上 ——
+用户点的「关闭」按钮其实被另一个弹层挡着,自然「没反应」。
+
+受影响的一共 5 个:`help-modal`、`diag-modal`、`camera-error`、
+`zoom-controls`,以及 `ar-tab`(它没藏住意味着 iPhone 上会显示一个
+点了没用的 AR 标签页 —— 与设计意图不符)。
+
+**修复**:`src/styles.css` 顶部的全局兜底规则
+
+```css
+[hidden] { display: none !important; }
+```
+
+这里的 `!important` 是必需的、也是正确用法 —— 它就是用来让 HTML 的
+`hidden` 属性拥有最终决定权的。优先级冲突是结构性的,
+靠调整规则顺序并不能稳定解决。
+
+**为什么之前的测试全是绿的**:早先的冒烟测试查的是
+`document.getElementById('ar-tab').hidden`,读的是 **JS 属性**。
+属性完全正确,所以测试通过 —— 但用户看到的是 CSS 渲染出来的样子。
+**要断言「看得见/看不见」,必须用 `getComputedStyle`。**
+
+现在有两道防线:
+
+- `test/styles.test.js`(单元测试,毫秒级)锁住那条 CSS 规则必须存在且带 `!important`
+- `tools/smoke-hidden.mjs` 用真实浏览器断言计算样式与点击可达性
+
+**连带修复**:`#cam-video` 原本带 `hidden` 属性。加上全局规则后它会变成
+`display: none`,而 **iOS Safari 对 `display:none` 的 `<video>` 可能不出帧**,
+导致 `drawImage(video)` 抓到空白画面。已去掉该属性 —— 它靠
+`1px 尺寸 + opacity:0` 隐藏,必须留在布局里。`test/styles.test.js` 会守住这一点。
 
 ### AR 路径怎么测
 

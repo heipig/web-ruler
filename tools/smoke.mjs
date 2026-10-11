@@ -155,15 +155,30 @@ try {
 
   // ---------- 检查 2:关键 UI 存在 ----------
   const uiCheck = await S('Runtime.evaluate', {
-    expression: `JSON.stringify({
-      canvas: !!document.getElementById('stage-canvas'),
-      refItems: document.querySelectorAll('.ref-item').length,
-      steps: document.querySelectorAll('.step').length,
-      fileInput: !!document.getElementById('file-input'),
-      helpBtn: !!document.getElementById('btn-help'),
-      arTabHidden: document.getElementById('ar-tab').hidden,
-      emptyVisible: !document.getElementById('empty-state').hidden,
-    })`,
+    expression: `JSON.stringify((() => {
+      // 判断「是不是真的看不见」必须看计算样式,不能看 .hidden 属性。
+      // 曾经踩过:hidden 属性明明是对的,但 CSS 里 .modal{display:grid}
+      // 优先级更高把它盖掉了,元素照样显示 —— 只看属性的话测试是绿的,
+      // 用户却看到弹层永久盖住整页。所以这里一律用 getComputedStyle 判断。
+      const invisible = (id) => {
+        const el = document.getElementById(id);
+        if (!el) return null;
+        const cs = getComputedStyle(el);
+        return cs.display === 'none' || cs.visibility === 'hidden';
+      };
+      return {
+        canvas: !!document.getElementById('stage-canvas'),
+        refItems: document.querySelectorAll('.ref-item').length,
+        steps: document.querySelectorAll('.step').length,
+        fileInput: !!document.getElementById('file-input'),
+        helpBtn: !!document.getElementById('btn-help'),
+        arTabHidden: document.getElementById('ar-tab').hidden,
+        emptyVisible: !document.getElementById('empty-state').hidden,
+        // 这些在初始状态下必须真的不可见
+        modalsInvisible: invisible('help-modal') && invisible('diag-modal'),
+        cameraErrorInvisible: invisible('camera-error'),
+      };
+    })())`,
     returnByValue: true,
   });
   const ui = JSON.parse(uiCheck.result.value);
@@ -175,6 +190,8 @@ try {
   if (ui.steps !== 3) uiProblems.push(`步骤指示应为 3 个,实际 ${ui.steps}`);
   if (!ui.fileInput) uiProblems.push('缺少文件选择器');
   if (!ui.emptyVisible) uiProblems.push('空状态未显示');
+  if (!ui.modalsInvisible) uiProblems.push('弹层在初始状态下居然可见(hidden 被 CSS 覆盖)');
+  if (!ui.cameraErrorInvisible) uiProblems.push('摄像头错误面板在初始状态下居然可见');
 
   // ---------- 检查 3:走完完整测量流程 ----------
   // 造一张合成图片:白底上画一个黑色矩形当「被测物」,

@@ -16,7 +16,8 @@
     "local": "vite --host",
     "test": "node --test",
     "smoke": "node tools/smoke.mjs",
-    "smoke:camera": "node tools/smoke-camera.mjs"
+    "smoke:camera": "node tools/smoke-camera.mjs",
+    "smoke:hidden": "node tools/smoke-hidden.mjs"
   },
   "devDependencies": {
     "vite": "^5.4.11"

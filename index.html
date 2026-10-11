@@ -38,8 +38,11 @@
         <div class="stage" id="stage">
           <canvas id="stage-canvas"></canvas>
 
-          <!-- 摄像头预览(相机/AR 模式下显示) -->
-          <video id="cam-video" playsinline muted hidden></video>
+          <!-- 摄像头预览。注意:这里**故意不加 hidden 属性**。
+           它必须留在布局里(#cam-video 用 1px 尺寸 + opacity:0 隐藏),
+           因为 iOS Safari 对 display:none 的 <video> 可能不出帧,
+           会导致 drawImage(video) 抓到空白画面。 -->
+          <video id="cam-video" playsinline muted></video>
 
           <!-- 空状态:还没载入图片/相机 -->
           <div class="empty-state" id="empty-state">
