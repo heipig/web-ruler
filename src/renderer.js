@@ -29,26 +29,30 @@ const COLOR = {
  * @param {import('./viewport.js').Viewport} o.viewport
  * @param {{type:string,modified:boolean}} [o.drag] 当前拖动状态
  * @param {(a:object,b:object,mm:number)=>object} [o.confidenceFor] 求某条线的精度
+ * @param {number} [o.lineScale] 线宽/字号缩放系数,导出大图时用
+ *
+ * ⚠️ 这个函数**不清屏**,也**不画底图** —— 那是调用方的责任。
+ * 早期版本在这里 clearRect,结果把调用方刚画好的照片擦掉了,
+ * 表现为「数字全对但画面全黑」。清屏必须和底图绘制在一起,才不容易搞错。
  */
-export function drawScene(ctx, { session, viewport, drag, confidenceFor }) {
-  const { width, height } = ctx.canvas;
-  ctx.clearRect(0, 0, width, height);
+export function drawScene(ctx, { session, viewport, drag, confidenceFor, lineScale = 1 }) {
+  const opt = { lineScale };
 
   // 参照物:矩形画成四边形并填充,线性画成一条线
-  drawReference(ctx, session, viewport);
+  drawReference(ctx, session, viewport, opt);
 
   // 测量线段 + 标签
   const measurements = session.isCalibrated ? session.getMeasurements() : [];
   for (const m of measurements) {
     const conf = m.complete && confidenceFor ? confidenceFor(m.a, m.b, m.mm) : null;
-    drawMeasurement(ctx, m, viewport, conf);
+    drawMeasurement(ctx, m, viewport, conf, opt);
   }
 
   // 点画在最上层,保证永远可见、可抓
-  drawPoints(ctx, session, viewport, drag);
+  drawPoints(ctx, session, viewport, drag, opt);
 }
 
-function drawReference(ctx, session, viewport) {
+function drawReference(ctx, session, viewport, opt) {
   const pts = session.refPoints;
   if (!pts.length) return;
 
@@ -68,8 +72,8 @@ function drawReference(ctx, session, viewport) {
     ctx.fillStyle = COLOR.refFill;
     ctx.fill();
     ctx.strokeStyle = COLOR.ref;
-    ctx.lineWidth = 2;
-    ctx.setLineDash([8, 5]);
+    ctx.lineWidth = 2 * opt.lineScale;
+    ctx.setLineDash([8 * opt.lineScale, 5 * opt.lineScale]);
     ctx.stroke();
     ctx.setLineDash([]);
   } else if (pts.length >= 2) {
@@ -80,22 +84,23 @@ function drawReference(ctx, session, viewport) {
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
     ctx.strokeStyle = COLOR.ref;
-    ctx.lineWidth = 2.5;
-    ctx.setLineDash([8, 5]);
+    ctx.lineWidth = 2.5 * opt.lineScale;
+    ctx.setLineDash([8 * opt.lineScale, 5 * opt.lineScale]);
     ctx.stroke();
     ctx.setLineDash([]);
   }
 }
 
-function drawMeasurement(ctx, m, viewport, conf) {
+function drawMeasurement(ctx, m, viewport, conf, opt) {
+  const s = opt.lineScale;
   const a = viewport.toScreen(m.a);
 
   if (!m.complete) {
     // 未配对:画一个「从这里开始量」的标记
     ctx.beginPath();
-    ctx.arc(a.x, a.y, 7, 0, Math.PI * 2);
+    ctx.arc(a.x, a.y, 7 * s, 0, Math.PI * 2);
     ctx.strokeStyle = COLOR.pending;
-    ctx.lineWidth = 2.5;
+    ctx.lineWidth = 2.5 * s;
     ctx.stroke();
     return;
   }
@@ -107,7 +112,7 @@ function drawMeasurement(ctx, m, viewport, conf) {
   ctx.moveTo(a.x, a.y);
   ctx.lineTo(b.x, b.y);
   ctx.strokeStyle = COLOR.measureHalo;
-  ctx.lineWidth = 6;
+  ctx.lineWidth = 6 * s;
   ctx.lineCap = 'round';
   ctx.stroke();
 
@@ -115,20 +120,20 @@ function drawMeasurement(ctx, m, viewport, conf) {
   ctx.moveTo(a.x, a.y);
   ctx.lineTo(b.x, b.y);
   ctx.strokeStyle = COLOR.measure;
-  ctx.lineWidth = 2.5;
+  ctx.lineWidth = 2.5 * s;
   ctx.stroke();
 
   // 两端画垂直小刻度,像卷尺的端点标记
-  drawEndCap(ctx, a, b);
-  drawEndCap(ctx, b, a);
+  drawEndCap(ctx, a, b, s);
+  drawEndCap(ctx, b, a, s);
 
   const label = formatLength(m.mm);
   const extra = conf ? `  ${confText(conf)}` : '';
-  drawLabel(ctx, (a.x + b.x) / 2, (a.y + b.y) / 2, label, conf ? conf.level : 'good', extra);
+  drawLabel(ctx, (a.x + b.x) / 2, (a.y + b.y) / 2, label, conf ? conf.level : 'good', extra, s);
 }
 
 /** 在线段端点画一个垂直于线段的短刻度 */
-function drawEndCap(ctx, tip, other) {
+function drawEndCap(ctx, tip, other, s) {
   const dx = tip.x - other.x;
   const dy = tip.y - other.y;
   const len = Math.hypot(dx, dy);
@@ -136,70 +141,71 @@ function drawEndCap(ctx, tip, other) {
   // 垂直方向
   const nx = -dy / len;
   const ny = dx / len;
-  const h = 7;
+  const h = 7 * s;
   ctx.beginPath();
   ctx.moveTo(tip.x - nx * h, tip.y - ny * h);
   ctx.lineTo(tip.x + nx * h, tip.y + ny * h);
   ctx.strokeStyle = COLOR.measureHalo;
-  ctx.lineWidth = 5;
+  ctx.lineWidth = 5 * s;
   ctx.stroke();
   ctx.strokeStyle = COLOR.measure;
-  ctx.lineWidth = 2.5;
+  ctx.lineWidth = 2.5 * s;
   ctx.stroke();
 }
 
-function drawPoints(ctx, session, viewport, drag) {
+function drawPoints(ctx, session, viewport, drag, opt) {
   const isDragging = (list, index) =>
     drag && drag.modified && drag.list === list && drag.index === index;
 
   session.refPoints.forEach((p, i) => {
-    drawPoint(ctx, viewport.toScreen(p), COLOR.ref, isDragging('ref', i));
+    drawPoint(ctx, viewport.toScreen(p), COLOR.ref, isDragging('ref', i), null, opt.lineScale);
   });
   session.measurePoints.forEach((p, i) => {
-    drawPoint(ctx, viewport.toScreen(p), COLOR.measure, isDragging('measure', i), COLOR.pending);
+    drawPoint(ctx, viewport.toScreen(p), COLOR.measure, isDragging('measure', i), COLOR.pending, opt.lineScale);
   });
 }
 
-function drawPoint(ctx, s, color, active, ringColor) {
+function drawPoint(ctx, s, color, active, ringColor, scale) {
+  const k = scale;
   // 外圈(描边)保证在任何背景上都可见
   ctx.beginPath();
-  ctx.arc(s.x, s.y, active ? 11 : 8, 0, Math.PI * 2);
+  ctx.arc(s.x, s.y, (active ? 11 : 8) * k, 0, Math.PI * 2);
   ctx.fillStyle = COLOR.label;
   ctx.fill();
 
   ctx.beginPath();
-  ctx.arc(s.x, s.y, active ? 8 : 5.5, 0, Math.PI * 2);
+  ctx.arc(s.x, s.y, (active ? 8 : 5.5) * k, 0, Math.PI * 2);
   ctx.fillStyle = color;
   ctx.fill();
 
   if (ringColor) {
     ctx.beginPath();
-    ctx.arc(s.x, s.y, active ? 14 : 11, 0, Math.PI * 2);
+    ctx.arc(s.x, s.y, (active ? 14 : 11) * k, 0, Math.PI * 2);
     ctx.strokeStyle = ringColor;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2 * k;
     ctx.stroke();
   }
 }
 
-function drawLabel(ctx, x, y, text, level, extra = '') {
-  ctx.font = '600 15px system-ui, -apple-system, "Segoe UI", sans-serif';
+function drawLabel(ctx, x, y, text, level, extra = '', scale = 1) {
+  ctx.font = `600 ${15 * scale}px system-ui, -apple-system, "Segoe UI", sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
   const main = text + extra;
-  const w = ctx.measureText(main).width + 18;
-  const h = 26;
+  const w = ctx.measureText(main).width + 18 * scale;
+  const h = 26 * scale;
 
   // 标签稍微往上偏移,避免压住线段
   const bx = x - w / 2;
-  const by = y - h - 12;
+  const by = y - h - 12 * scale;
 
   ctx.beginPath();
-  roundRect(ctx, bx, by, w, h, 7);
+  roundRect(ctx, bx, by, w, h, 7 * scale);
   ctx.fillStyle = 'rgba(248, 250, 252, 0.95)';
   ctx.fill();
   ctx.strokeStyle = levelColor(level);
-  ctx.lineWidth = 2;
+  ctx.lineWidth = 2 * scale;
   ctx.stroke();
 
   ctx.fillStyle = COLOR.label;

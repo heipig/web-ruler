@@ -130,10 +130,14 @@ function render() {
   if (state.mode === 'ar') return; // AR 有自己的渲染循环(WebGL)
 
   resizeCanvas();
-  const { width, height } = els.canvas.getBoundingClientRect();
+  const rect = els.stage.getBoundingClientRect();
+  const width = rect.width;
+  const height = rect.height;
   const dpr = Math.min(window.devicePixelRatio || 1, 3);
 
-  // 重设变换并清屏(CSS 像素坐标系)
+  // ⚠️ 清屏必须和底图绘制写在一起。
+  // 之前把 clearRect 放在 drawScene 里,导致底图刚画好就被擦掉,
+  // 表现为「数字全对但画面全黑」。这两步是不可分割的一对。
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
 
@@ -146,7 +150,7 @@ function render() {
     ctx.drawImage(state.image, ox, oy, state.imageW * s, state.imageH * s);
   }
 
-  // 2. 画测量覆盖层
+  // 2. 画测量覆盖层(只画覆盖层,不清屏、不画底图)
   drawScene(ctx, {
     session: state.session,
     viewport: state.viewport,
@@ -879,18 +883,17 @@ function exportAnnotated() {
   vp.setContent(state.imageW, state.imageH);
   vp.setView(state.imageW, state.imageH);
 
-  // 标注图按原始像素绘制,线宽要相应加粗才看得清
+  // 导出图按原始像素绘制,线宽和字号要随图变大才看得清。
+  // 以 1200px 为基准,避免小图上线太粗、大图上线细得看不见。
   const lineScale = Math.max(1, Math.max(state.imageW, state.imageH) / 1200);
-  ectx.save();
-  ectx.scale(1, 1);
-  ectx.lineWidth = lineScale;
+
   drawScene(ectx, {
     session: state.session,
     viewport: vp,
     drag: null,
     confidenceFor: (a, b, mm) => confidenceFor(a, b, mm),
+    lineScale,
   });
-  ectx.restore();
 
   c.toBlob((blob) => {
     if (!blob) { toast('导出失败'); return; }

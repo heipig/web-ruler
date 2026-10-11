@@ -238,6 +238,21 @@ try {
       const results = [...document.querySelectorAll('.result-item .result-value')]
         .map(e => e.textContent);
 
+      // 关键:检查画布上真的画出了照片,而不是只剩测量覆盖层。
+      // 之前 drawScene 在画完底图后又 clearRect,把照片擦掉了 —— 这个
+      // 断言就是为抓这类「逻辑全对但画面是黑的」bug 而存在的。
+      const cv = document.getElementById('stage-canvas');
+      const cctx = cv.getContext('2d');
+      const mid = cctx.getImageData(Math.floor(cv.width/2), Math.floor(cv.height/2), 1, 1).data;
+      // 参照物是 #cbd5e1(浅灰),被测物是黑色;两者都不该是透明/纯黑底
+      const samplePoints = [
+        [0.25, 0.2], [0.4, 0.25], [0.5, 0.7], [0.3, 0.7]
+      ].map(([fx, fy]) => {
+        const px = cctx.getImageData(Math.floor(cv.width*fx), Math.floor(cv.height*fy), 1, 1).data;
+        return { r: px[0], g: px[1], b: px[2], a: px[3] };
+      });
+      const nonEmpty = samplePoints.filter(p => p.a > 10).length;
+
       // 拿内部状态做精确断言
       const info = window.__rulerDebug();
 
@@ -249,6 +264,9 @@ try {
         measuredMm: info.lastMeasuredMm,
         calibrated: info.calibrated,
         calibKind: info.calibKind,
+        canvasSamples: samplePoints,
+        nonEmptySamples: nonEmpty,
+        centerPixel: { r: mid[0], g: mid[1], b: mid[2], a: mid[3] },
       });
     })()`,
     awaitPromise: true,
@@ -282,6 +300,17 @@ try {
       }
     } else {
       flowProblems.push('测量结果不是有限数值');
+    }
+
+    // 渲染断言:画布上必须真的画出了图片内容。
+    // 这一条专门防「底图被覆盖层擦掉」这类只看数据看不出来的 bug。
+    if (flow.nonEmptySamples < 3) {
+      flowProblems.push(
+        `画布上没有画出图片内容(采样点 ${flow.nonEmptySamples}/4 为空白)`
+        + ` — 可能底图绘制后被覆盖层清掉了`,
+      );
+    } else {
+      console.log(`  ✓ 渲染:4 个采样点中 ${flow.nonEmptySamples} 个有图像内容`);
     }
   }
 
