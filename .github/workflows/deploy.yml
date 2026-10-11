@@ -26,13 +26,18 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # 用 22 LTS:20 已过维护期,安全更新停止
+          node-version: '22'
           cache: npm
 
       - name: 安装依赖
         run: npm ci
 
       - name: 单元测试
+        # 不加文件名参数:让 Node 自动发现测试文件。
+        # 注意不要写成 node --test "test/*.test.js" —— 引号会阻止 shell
+        # 展开通配符,而 Node 20 不会自己 glob,于是报「找不到测试文件」。
+        # 无参数的自动发现同时兼容 Windows 和 Linux。
         run: npm test
 
       - name: 构建

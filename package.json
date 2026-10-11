@@ -14,7 +14,7 @@
     "build": "vite build",
     "preview": "vite preview --port 4173",
     "local": "vite --host",
-    "test": "node --test \"test/*.test.js\"",
+    "test": "node --test",
     "smoke": "node tools/smoke.mjs"
   },
   "devDependencies": {
