@@ -21,12 +21,14 @@ WebRuler/
 │   ├── references.js       参照物预设库(含尺寸标准出处)
 │   ├── camera.js           摄像头控制(权限、切换、抓帧、释放)
 │   ├── capabilities.js     运行时能力探测(WebXR / 摄像头 / 安全上下文)
+│   ├── ar-logic.js         AR 纯逻辑(可测):位姿判空、状态文案、点配对
 │   ├── ar.js               AR 模式(动态加载,依赖 three.js)
 │   ├── ar.css              AR 叠加层样式(随 ar.js 一起按需加载)
 │   └── styles.css          主样式
 ├── test/                   单元测试(node --test)
 └── tools/
-    └── smoke.mjs           真实浏览器冒烟测试(DevTools Protocol)
+    ├── smoke.mjs           照片模式冒烟测试
+    └── smoke-camera.mjs    摄像头模式冒烟测试(用假视频流)
 ```
 
 ---
@@ -95,7 +97,8 @@ rel = √( (σ_L / L_measure)²  +  (σ_L / L_reference)² )
 npm test
 ```
 
-覆盖 81 项:几何(含单应矩阵反解验证)、单位换算、参照物库、测量状态机、视口变换、精度模型、绘制层约定。
+覆盖 107 项:几何(含单应矩阵反解验证)、单位换算、参照物库、测量状态机、
+视口变换、精度模型、绘制层约定、AR 纯逻辑。
 
 关于几何测试的思路:**用已知的投影矩阵构造「拍到的照片」,再反解**,
 然后验证图像上任意两点映射回毫米平面的距离等于它们的真实距离。
@@ -109,24 +112,54 @@ drawScene 里有一次 clearRect,把调用方刚画好的照片擦掉了,
 
 ### 浏览器冒烟测试
 
+分两个,覆盖项目的两条核心路径(缺一条就有一半功能没被验证过):
+
 ```bash
 npm run build
 npm run preview                       # 另开一个终端
-node tools/smoke.mjs http://localhost:4173/
+
+npm run smoke        -- http://localhost:4173/    # 照片模式
+npm run smoke:camera -- http://localhost:4173/    # 摄像头模式
 ```
 
-它用 DevTools Protocol 启动真实的 Edge/Chrome,做四件事:
+**照片模式**(`tools/smoke.mjs`)用 DevTools Protocol 启动真实的 Edge/Chrome:
 
 1. 检查页面无未捕获异常、无 `console.error`
 2. 检查关键 UI 元素都渲染出来了
 3. 合成一张已知几何关系的图片,走完「选参照物 → 点四点 → 量长度」全流程
 4. **断言测量数值**:参照物 400px = 297mm,被测线 500px,期望 371.25mm,容差 1mm
+5. **采样画布像素**:断言照片真的画出来了(防「底图被覆盖层擦掉」)
 
-第 4 步是关键 —— 它把「数学正确」和「浏览器里真的跑对了」连起来验证。
+**摄像头模式**(`tools/smoke-camera.mjs`)用 Chrome 的
+`--use-fake-device-for-media-stream` 提供一路合成视频流 —— 所以无需真实摄像头、
+也不碰用户隐私,却能把整条链路跑通:
+
+1. 点「打开摄像头」,等 video 元数据就绪(`imageSize` 非空)
+2. 断言没有出现摄像头错误面板、模式确实切到了 `camera`
+3. 用几何正确的 A4 四角标定,再量一条与参照物同宽的线
+4. **断言结果 = 297.00mm**
+5. **采样画布像素**:断言 `drawImage(video)` 真的把画面画上去了
+6. 校验 AR 不受支持时标签页确实被隐藏(降级正确)
+
+第 4、5 步是关键 —— 它们把「数学正确」和「浏览器里真的跑对了」连起来验证。
 构建成功只说明能打包,不说明运行正确。
 
 测试通过 `window.__rulerAddPoint` / `window.__rulerDebug` 驱动流程(定义在 `app.js` 末尾)。
 这两个钩子是纯前端应用,不构成安全问题。
+
+### AR 路径怎么测
+
+AR 需要真实 ARCore 设备,浏览器里无法自动化。所以把 AR 里的**纯逻辑**抽到
+`src/ar-logic.js`,由 `test/ar-logic.test.js` 覆盖(26 项):
+
+- `pickReticlePose()` —— 从一帧 hit-test 结果取准星位姿。
+  **`getPose()` 返回 `null` 在真实设备上会发生**,直接读 `pose.transform.matrix` 会崩。
+  这个函数把它收口成「有/没有」两种结果,顺带接住 `getHitTestResults` 抛错
+  (会话结束时可能发生)。
+- `arStatusText()` —— 每个阶段该说什么话(说错用户就不知道下一步做什么)
+- `pairedDistances()` / `arReadoutText()` / `lineVertices()` —— 点的配对与距离
+
+`ar.js` 里剩下的只有 WebGL、WebXR 会话和 DOM,足够薄,不至于藏 bug。
 
 ---
 

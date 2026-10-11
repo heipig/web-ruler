@@ -1007,6 +1007,8 @@ window.__rulerDebug = () => {
     imageSize: [state.imageW, state.imageH],
     zoom: state.viewport.zoom,
     mode: state.mode,
+    cameraActive: state.cameraActive,
+    arSupported: state.arSupported,
   };
 };
 

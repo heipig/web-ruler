@@ -20,10 +20,18 @@
 
 import './ar.css';
 import * as THREE from 'three';
-import { formatLength } from './units.js';
+import {
+  pickReticlePose,
+  arStatusText,
+  arReadoutText,
+  lineVertices,
+} from './ar-logic.js';
 
-/** three.js 的 ARButton 需要从 addons 引;这里自己实现按钮,避免多引依赖 */
-const HIT_TEST_RADIUS_M = 0.4; // 准星半径 0.4 米,越大越容易命中但越不精确
+/**
+ * 准星命中半径(米)。这个常量目前仅用于文档说明:
+ * 实际命中范围由浏览器/ARCore 决定,WebXR 的 hit-test 不暴露半径参数。
+ */
+export const HIT_TEST_RADIUS_M = 0.4;
 
 export async function startAR(container, { onStatus, onExit } = {}) {
   if (!navigator.xr) {
@@ -123,7 +131,10 @@ export async function startAR(container, { onStatus, onExit } = {}) {
     updateReadout();
   };
 
-  /** 每两个点画一条线;奇数个点时最后一个是待配对的起点 */
+  /**
+   * 每两个点画一条线;奇数个点时最后一个是待配对的起点。
+   * 顶点生成用 ar-logic.js 里测过的纯函数,这里只管交给 three.js。
+   */
   function updateLine() {
     if (line) {
       scene.remove(line);
@@ -131,35 +142,28 @@ export async function startAR(container, { onStatus, onExit } = {}) {
       line.material.dispose();
       line = null;
     }
-    if (points.length < 2) return;
+    const verts = lineVertices(points);
+    if (!verts.length) return;
 
-    const verts = [];
-    for (let i = 0; i + 1 < points.length; i += 2) {
-      verts.push(points[i].x, points[i].y, points[i].z);
-      verts.push(points[i + 1].x, points[i + 1].y, points[i + 1].z);
-    }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
     line = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0x22d3ee }));
     scene.add(line);
   }
 
+  /** 读数与状态文案都来自 ar-logic.js(已测试),这里只负责贴到 DOM */
   function updateReadout() {
-    if (points.length < 2) {
+    const text = arReadoutText(points);
+    if (text === null) {
       readoutEl.hidden = true;
-      return;
+    } else {
+      readoutEl.hidden = false;
+      readoutEl.textContent = text;
     }
-    // 显示最后一条完整测量的长度
-    const n = points.length;
-    if (n % 2 !== 0) {
-      readoutEl.hidden = true;
-      return;
-    }
-    const a = points[n - 2];
-    const b = points[n - 1];
-    const meters = a.distanceTo(b);
-    readoutEl.hidden = false;
-    readoutEl.textContent = formatLength(meters * 1000);
+  }
+
+  function currentStatus(hasPlane) {
+    return arStatusText({ hasPlane, pointCount: points.length });
   }
 
   addBtn.addEventListener('click', addBtnHandler);
@@ -200,26 +204,14 @@ export async function startAR(container, { onStatus, onExit } = {}) {
   renderer.setAnimationLoop((time, frame) => {
     if (!frame) return;
 
-    const results = frame.getHitTestResults(hitTestSource);
-    if (results.length > 0) {
-      const pose = results[0].getPose(renderer.xr.getReferenceSpace());
-      if (pose) {
-        reticle.visible = true;
-        reticle.matrix.fromArray(pose.transform.matrix);
-        addBtn.disabled = false;
-        if (points.length === 0) {
-          setStatus('准星已找到平面。对准起点,点「加点」。');
-        } else if (points.length === 1) {
-          setStatus('已记下起点。移动手机对准终点,再点「加点」。');
-        } else if (points.length % 2 === 0) {
-          setStatus('这条量完了。可以继续量下一段,或点「退出」。');
-        }
-      }
-    } else {
-      reticle.visible = false;
-      addBtn.disabled = true;
-      setStatus('正在寻找平面…请把手机对着有明显纹理的地面或桌面,慢慢移动。');
-    }
+    // 用测过的纯函数取位姿:它统一处理 getPose() 返回 null 的情况。
+    // 直接写 results[0].getPose(...).transform.matrix 会在追踪丢失时崩溃。
+    const hit = pickReticlePose(frame, hitTestSource, renderer.xr.getReferenceSpace());
+
+    reticle.visible = hit.ok;
+    addBtn.disabled = !hit.ok;
+    if (hit.ok) reticle.matrix.fromArray(hit.matrix);
+    setStatus(currentStatus(hit.ok));
 
     // three.js 的 AR 模式必须用 renderer.render 配合 XR 相机
     renderer.render(scene, camera);
@@ -229,5 +221,3 @@ export async function startAR(container, { onStatus, onExit } = {}) {
 
   return cleanup;
 }
-
-export { HIT_TEST_RADIUS_M };
