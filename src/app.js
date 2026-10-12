@@ -15,6 +15,10 @@ import { drawScene } from './renderer.js';
 import { listReferences, getReference } from './references.js';
 import { formatLength, toMillimeters } from './units.js';
 import { CameraController, describeCameraError } from './camera.js';
+import {
+  nextCameraAction,
+  CAMERA_ACTION,
+} from './camera-lifecycle.js';
 import { runDiagnostics, detectWebXRAR, guessPlatform } from './capabilities.js';
 import {
   estimateScaleUncertainty,
@@ -68,6 +72,8 @@ const state = {
   imageH: 0,
   camera: null,
   cameraActive: false,
+  cameraStarting: false,      // 正在启动中,用于防并发点击
+  cameraInterrupted: false,   // 被「切到后台」中断,回前台应自动恢复
   arCleanup: null,        // AR 模块返回的清理函数
   arSupported: false,
   drag: null,             // {list, index, modified}
@@ -93,12 +99,32 @@ function toast(msg, ms = 2600) {
  * 不这么做的话,在高 DPI 屏上线条和文字都是糊的 —— 因为 canvas 的
  * 位图尺寸被 CSS 拉伸了。
  */
+/**
+ * 画布使用的设备像素比上限。
+ *
+ * 为什么要有上限:画布位图内存 = 宽 × 高 × 4 字节。
+ * 390×700 的舞台在 DPR 3 下约 9.8MB,DPR 2 只有约 4.4MB。
+ * 测量时对这点清晰度差异不敏感,但内存减半对移动端稳定性意义很大 ——
+ * 移动端浏览器内存吃紧时会直接杀掉标签页,用户看到的就是「闪退」。
+ *
+ * ⚠️ 这个值必须被 resizeCanvas 和 render 共用。
+ * 两处各自算 DPR 曾经写成了 2 和 3,导致画布位图尺寸按 2 分配、
+ * 变换矩阵却按 3 放大 —— 画面会整体错位(内容被放大 1.5 倍、清屏也清不干净)。
+ * 保持单一来源,避免这类「两处常量悄悄不一致」的问题。
+ */
+const MAX_CANVAS_DPR = 2;
+
+function canvasDpr() {
+  return Math.min(window.devicePixelRatio || 1, MAX_CANVAS_DPR);
+}
+
 function resizeCanvas() {
   const rect = els.stage.getBoundingClientRect();
-  const dpr = Math.min(window.devicePixelRatio || 1, 3); // 上限 3,避免超大画布拖慢
+  const dpr = canvasDpr();
   const w = Math.max(1, Math.round(rect.width * dpr));
   const h = Math.max(1, Math.round(rect.height * dpr));
 
+  // 只有尺寸真的变了才重设(重设会重新分配整块位图,很贵)
   if (els.canvas.width !== w || els.canvas.height !== h) {
     els.canvas.width = w;
     els.canvas.height = h;
@@ -133,7 +159,7 @@ function render() {
   const rect = els.stage.getBoundingClientRect();
   const width = rect.width;
   const height = rect.height;
-  const dpr = Math.min(window.devicePixelRatio || 1, 3);
+  const dpr = canvasDpr();
 
   // ⚠️ 清屏必须和底图绘制写在一起。
   // 之前把 clearRect 放在 drawScene 里,导致底图刚画好就被擦掉,
@@ -142,12 +168,20 @@ function render() {
   ctx.clearRect(0, 0, width, height);
 
   // 1. 画底图(照片 / 摄像头画面)
+  // drawImage 的源可能是 <video>:流被停掉(切后台、系统回收)后,
+  // 对 srcObject=null 的 video 调 drawImage 会抛 InvalidStateError。
+  // 渲染循环里抛异常会每帧刷一次报错,所以这里兜住 —— 画面黑一帧没关系,
+  // 循环必须活着,否则整个界面就再也画不出来了。
   if (state.image && state.imageW > 0) {
-    const s = state.viewport.scale;
-    const ox = state.viewport.offsetX;
-    const oy = state.viewport.offsetY;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(state.image, ox, oy, state.imageW * s, state.imageH * s);
+    try {
+      const s = state.viewport.scale;
+      const ox = state.viewport.offsetX;
+      const oy = state.viewport.offsetY;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(state.image, ox, oy, state.imageW * s, state.imageH * s);
+    } catch {
+      // 源暂时不可用(视频流被挂起):跳过这一帧,等它恢复
+    }
   }
 
   // 2. 画测量覆盖层(只画覆盖层,不清屏、不画底图)
@@ -471,7 +505,21 @@ function loadPhotoFile(file) {
 
 // ---------- 摄像头 ----------
 
+/**
+ * 启动摄像头。
+ *
+ * ⚠️ 这里必须处理「启动过程中页面被切到后台」。
+ * 真实手机上点「打开摄像头」会先弹系统权限框,这个弹窗会让页面进入 hidden,
+ * 于是 visibilitychange 里的 stopCamera() 会**在 await 返回之前**就执行。
+ * 曾经的写法没有覆盖这种情况,导致授权后回来是纯黑画面、没有任何可点入口,
+ * 用户描述为「闪退」。见下方 stopCamera 与 visibilitychange 的处理。
+ */
 async function startCamera() {
+  // 防并发:连续点两次「打开摄像头」不应启动两条流(会在某些机型上黑屏)
+  if (state.cameraStarting) return;
+  state.cameraStarting = true;
+  state.cameraInterrupted = false;
+
   setMode('camera');
   els.emptyState.hidden = true;
   els.cameraError.hidden = true;
@@ -481,11 +529,18 @@ async function startCamera() {
   try {
     await state.camera.start({ facingMode: 'environment' });
   } catch (err) {
+    state.cameraStarting = false;
     showCameraError(err.message || describeCameraError(err));
     return;
   }
+  state.cameraStarting = false;
 
-  state.cameraActive = true;
+  // await 期间用户可能已经切走了(权限弹窗、切 app、锁屏)。
+  // 此时不能继续把已停止的画面当成底图,否则就是黑屏。
+  if (document.hidden) {
+    stopCamera({ interrupted: true });
+    return;
+  }
 
   // 摄像头画面用 video 的原始像素尺寸作为「图像坐标」
   const w = els.video.videoWidth;
@@ -495,7 +550,9 @@ async function startCamera() {
     return;
   }
 
+  state.cameraActive = true;
   setImageSource(els.video, w, h);
+  els.emptyHint.textContent = '上传一张照片,或打开摄像头。';
   state.session.reset();
   startRenderLoop();
   syncUI();
@@ -504,6 +561,7 @@ async function startCamera() {
 
 function showCameraError(msg) {
   state.cameraActive = false;
+  state.cameraInterrupted = false; // 明确失败后不再自动重启,避免权限被拒时反复弹窗
   stopCamera();
   state.image = null;
   els.emptyState.hidden = true;
@@ -513,9 +571,45 @@ function showCameraError(msg) {
   els.zoomControls.hidden = true;
 }
 
-function stopCamera() {
+/**
+ * 停止摄像头。
+ *
+ * @param {{interrupted?:boolean}} [opts]
+ *   interrupted=true 表示是「页面切到后台」这类被动停止,回到前台应自动恢复。
+ *
+ * 三件必须做的事(都是踩过的坑):
+ *   1. **清掉底图**。state.image 在摄像头模式下就是 <video> 元素本身,
+ *      停流后它还挂在 state 里,render() 会继续对它 drawImage。
+ *   2. **留下恢复入口**。只要当前没有底图,就必须让用户看到能点的东西。
+ *      绝不出现「黑屏 + 没有任何按钮」—— 那正是用户描述的「闪退」。
+ *      另一条会走到这里的路径:切到「照片」标签后取消了文件选择框,
+ *      此时既没有照片也没有摄像头画面。
+ *   3. 区分「被动中断」和「主动离开」,只有前者回到前台才自动重启。
+ */
+function stopCamera({ interrupted = false } = {}) {
   if (state.camera) state.camera.stop();
   state.cameraActive = false;
+  state.cameraInterrupted = interrupted;
+
+  // 底图若是摄像头画面,必须一起清掉
+  if (state.image === els.video) {
+    state.image = null;
+    state.imageW = 0;
+    state.imageH = 0;
+  }
+
+  if (interrupted) {
+    els.emptyHint.textContent =
+      '摄像头已暂停(页面切到后台时系统会挂起摄像头)。点「打开摄像头」继续。';
+  }
+
+  // 没有底图 = 现在是黑屏,必须给一个可见的出口
+  if (!state.image) {
+    els.emptyState.hidden = false;
+    els.cameraError.hidden = true;
+    els.hintPill.hidden = true;
+    els.zoomControls.hidden = true;
+  }
 }
 
 // ---------- 模式切换 ----------
@@ -828,10 +922,24 @@ function bindUI() {
     syncZoom();
   });
 
-  // 切到后台时关摄像头(省电、也避免指示灯一直亮)
+  // 切到后台时关摄像头(省电、也避免指示灯一直亮);回到前台自动恢复。
+  // ⚠️ 决策交给 camera-lifecycle.js 的纯函数,那样这些交织情况可以用
+  // 单元测试穷举(见 test/camera-lifecycle.test.js)。
+  // 曾经这里只停不恢复,导致回来时黑屏且无任何按钮,用户描述为「闪退」。
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden && state.mode === 'camera') {
-      stopCamera();
+    const action = nextCameraAction({
+      hidden: document.hidden,
+      mode: state.mode,
+      active: state.cameraActive,
+      interrupted: state.cameraInterrupted,
+      starting: state.cameraStarting,
+    });
+
+    if (action === CAMERA_ACTION.STOP) {
+      stopCamera({ interrupted: true });
+    } else if (action === CAMERA_ACTION.RESTART) {
+      state.cameraInterrupted = false;
+      startCamera();
     }
   });
 

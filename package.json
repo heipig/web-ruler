@@ -17,6 +17,7 @@
     "test": "node --test",
     "smoke": "node tools/smoke.mjs",
     "smoke:camera": "node tools/smoke-camera.mjs",
+    "smoke:lifecycle": "node tools/smoke-camera-lifecycle.mjs",
     "smoke:hidden": "node tools/smoke-hidden.mjs"
   },
   "devDependencies": {

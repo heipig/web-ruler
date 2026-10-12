@@ -20,6 +20,7 @@ WebRuler/
 │   ├── units.js            单位格式化与换算
 │   ├── references.js       参照物预设库(含尺寸标准出处)
 │   ├── camera.js           摄像头控制(权限、切换、抓帧、释放)
+│   ├── camera-lifecycle.js 摄像头生命周期决策(可测):切后台/回前台/黑屏不变量
 │   ├── capabilities.js     运行时能力探测(WebXR / 摄像头 / 安全上下文)
 │   ├── ar-logic.js         AR 纯逻辑(可测):位姿判空、状态文案、点配对
 │   ├── ar.js               AR 模式(动态加载,依赖 three.js)
@@ -29,6 +30,7 @@ WebRuler/
 └── tools/
     ├── find-browser.mjs    跨平台查找 Chrome/Chromium/Edge
     ├── smoke-hidden.mjs    隐藏元素与弹层开关测试
+    ├── smoke-camera-lifecycle.mjs  摄像头切后台/回前台测试
     ├── smoke.mjs           照片模式冒烟测试
     └── smoke-camera.mjs    摄像头模式冒烟测试(用假视频流)
 ```
@@ -99,8 +101,8 @@ rel = √( (σ_L / L_measure)²  +  (σ_L / L_reference)² )
 npm test
 ```
 
-覆盖 114 项:几何(含单应矩阵反解验证)、单位换算、参照物库、测量状态机、
-视口变换、精度模型、绘制层约定、AR 纯逻辑、样式不变量。
+覆盖 134 项:几何(含单应矩阵反解验证)、单位换算、参照物库、测量状态机、
+视口变换、精度模型、绘制层约定、AR 纯逻辑、摄像头生命周期、样式不变量。
 
 关于几何测试的思路:**用已知的投影矩阵构造「拍到的照片」,再反解**,
 然后验证图像上任意两点映射回毫米平面的距离等于它们的真实距离。
@@ -114,13 +116,14 @@ drawScene 里有一次 clearRect,把调用方刚画好的照片擦掉了,
 
 ### 浏览器冒烟测试
 
-分三个,覆盖三条核心路径(缺一条就有一部分功能没被验证过):
+分四个,覆盖四条核心路径(缺一条就有一部分功能没被验证过):
 
 ```bash
 npm run build
 npm run preview                       # 另开一个终端
 
 npm run smoke:hidden -- http://localhost:4173/    # 隐藏元素 / 弹层开关
+npm run smoke:lifecycle -- http://localhost:4173/ # 摄像头切后台/回前台
 npm run smoke        -- http://localhost:4173/    # 照片模式
 npm run smoke:camera -- http://localhost:4173/    # 摄像头模式
 ```
@@ -134,6 +137,20 @@ npm run smoke:camera -- http://localhost:4173/    # 摄像头模式
 
 第 1 步的写法是关键:必须看**计算样式**,不能看 `el.hidden` 属性 ——
 属性是对的、CSS 却不理它,这种情况真实发生过(见下方「hidden 属性陷阱」)。
+
+**摄像头生命周期**(`tools/smoke-camera-lifecycle.mjs`)—— 这个测的是
+用户报「点调用摄像头就闪退」的那个 bug,模拟真机必然发生的三种时序:
+
+1. 摄像头运行中切后台(锁屏 / 切 app)→ 回到前台
+2. 启动过程中切后台(**系统权限弹窗就会触发**)→ 用户授权返回
+3. 反复切前后台 3 次
+
+判定标准不是「实现方式」,而是**用户有没有出路**:
+要么摄像头自动恢复出画面,要么至少有一个可见可点的恢复入口。
+**绝不允许「黑屏 + 没有任何按钮」** —— 那是用户描述的「闪退」。
+
+这条测试必须在 `Emulation.setDeviceMetricsOverride` 下跑(手机尺寸 + DPR 3),
+因为桌面固定窗口不会触发那些时序。
 
 **照片模式**(`tools/smoke.mjs`)用 DevTools Protocol 启动真实的 Edge/Chrome:
 
@@ -206,6 +223,64 @@ npm run smoke:camera -- http://localhost:4173/    # 摄像头模式
 `display: none`,而 **iOS Safari 对 `display:none` 的 `<video>` 可能不出帧**,
 导致 `drawImage(video)` 抓到空白画面。已去掉该属性 —— 它靠
 `1px 尺寸 + opacity:0` 隐藏,必须留在布局里。`test/styles.test.js` 会守住这一点。
+
+### ⚠️ 摄像头生命周期的坑(用户报「闪退」的根因)
+
+**现象**:点「调用摄像头」后出现纯黑画面,没有任何提示、也没有可点的按钮,
+只能刷新页面。换了两台手机都一样。
+
+**根因**:`visibilitychange` 处理器**只负责停,不负责恢复**:
+
+```js
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && state.mode === 'camera') stopCamera();
+});
+```
+
+而手机上「打开摄像头」这个动作**必然**伴随页面进入 hidden ——
+系统权限弹窗一出现就会触发。于是:
+
+1. `startCamera()` 第一步是 `setMode('camera')`,所以 `await getUserMedia`
+   期间 `state.mode` 已经是 `'camera'`,这个 stop 一定命中
+2. 摄像头被停掉后回到前台,**没有任何代码重启它**
+3. `state.image` 还指着那个已经停止的 `<video>`,`render()` 继续 drawImage
+4. `emptyState` 在 `startCamera` 开头就被 `hidden = true`,而 `cameraError`
+   也没显示 → **黑屏 + 无可点入口**
+
+第 4 点最致命:用户连「重试」都点不到。这就是「闪退」的真实体验。
+
+**修复**(三处,缺一不可):
+
+1. `stopCamera({ interrupted: true })` 区分「被动中断」与「主动离开」,
+   并在没有底图时**强制显示空状态** —— 保证任何情况下都有出口
+2. 回到前台时自动重启被中断的摄像头
+3. `startCamera` 在 `await` 之后复查 `document.hidden`,
+   避免把已经停掉的画面当成底图
+
+**顺带修掉的两个同类问题**:
+
+- **切到「照片」标签后取消文件选择框**也会黑屏(既没照片也没摄像头画面)。
+  现在 `stopCamera` 统一保证「没底图就给出口」。
+- **画布 DPR 上限从 3 降到 2**。画布位图内存 = 宽×高×4 字节,
+  390×700 的舞台在 DPR 3 下约 9.8MB,DPR 2 只要约 4.4MB。
+  移动端浏览器内存吃紧时会直接杀掉标签页(同样表现为「闪退」)。
+  注意这个值必须被 `resizeCanvas` 和 `render` **共用** ——
+  两处各自算 DPR 曾写成 2 和 3,会导致位图按 2 分配、变换按 3 放大,画面整体错位。
+
+**决策逻辑抽成了纯函数**(`src/camera-lifecycle.js`),由
+`test/camera-lifecycle.test.js` 覆盖 21 项 —— 因为「用户操作」和「系统事件」
+两条线会任意交织,用单元测试穷举比真机可靠得多。
+
+**为什么之前的测试全是绿的**:两个原因,都值得记住。
+
+1. 早先的摄像头冒烟测试用 `--use-fake-ui-for-media-stream` **自动授予权限**,
+   所以**权限弹窗根本不出现**,hidden 时序从来没被触发过。
+   自动化的便利恰恰掩盖了真机上最关键的那一步。
+2. 之前的测试只断言「摄像头能开、数值对」,**没有断言「异常路径之后界面还能用」**。
+   一个只在失败路径上出现的死界面,能轻松躲过所有只测成功路径的测试。
+
+排查时我还先验证并**否定**了两个假设(每帧重分配画布、JS 堆泄漏),
+实测数据都不支持 —— 记在这里避免以后重复怀疑它们。
 
 ### AR 路径怎么测
 

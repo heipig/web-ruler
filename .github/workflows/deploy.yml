@@ -53,10 +53,10 @@ jobs:
           echo "产物文件数: $(find dist -type f | wc -l)"
 
       # 浏览器端冒烟测试:构建成功 ≠ 浏览器里跑得起来。
-      # 覆盖三条路径:隐藏元素/弹层开关、上传照片、实时摄像头,
+      # 覆盖四条路径:隐藏元素/弹层、摄像头生命周期、上传照片、实时摄像头,
       # 并断言测量数值正确。runner 上装了 Chrome,用假的摄像头视频流
       # 即可无人值守跑通摄像头路径。
-      - name: 浏览器冒烟测试(弹层 + 照片 + 摄像头)
+      - name: 浏览器冒烟测试(弹层 + 生命周期 + 照片 + 摄像头)
         run: |
           set -e
           npx vite preview --port 4173 --strictPort &
@@ -76,6 +76,7 @@ jobs:
           fi
 
           node tools/smoke-hidden.mjs http://localhost:4173/
+          node tools/smoke-camera-lifecycle.mjs http://localhost:4173/
           node tools/smoke.mjs http://localhost:4173/
           node tools/smoke-camera.mjs http://localhost:4173/
 
